@@ -4,6 +4,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from auth.msal_client import build_authorization_url, create_confidential_client, exchange_code_for_tokens, new_flow_state
@@ -11,6 +12,41 @@ from auth.utils import AuthConfig, extract_user, load_auth_config, validate_id_t
 
 
 router = APIRouter()
+
+
+def _render_no_access_page(*, message: str, details: str | None = None) -> HTMLResponse:
+        safe_message = (message or "You do not have access to this application.").strip()
+        safe_details = (details or "").strip()
+        details_block = ""
+        if safe_details:
+                details_block = (
+                        "<details style=\"margin-top:16px\">"
+                        "<summary>Technical details</summary>"
+                        f"<pre style=\"white-space:pre-wrap;word-break:break-word;\">{safe_details}</pre>"
+                        "</details>"
+                )
+
+        html = f"""<!doctype html>
+<html lang=\"en\">
+    <head>
+        <meta charset=\"utf-8\" />
+        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+        <title>Access required</title>
+    </head>
+    <body style=\"font-family:system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:760px;margin:40px auto;padding:0 16px;line-height:1.45\">
+        <h1 style=\"margin:0 0 12px\">Access required</h1>
+        <p style=\"margin:0 0 12px\">{safe_message}</p>
+        <p style=\"margin:0 0 16px\">
+            For access and more information, contact
+            <a href=\"mailto:founder@eaiwfm.com\">founder@eaiwfm.com</a>.
+        </p>
+        <p style=\"margin:0 0 16px\">
+            You can also try signing out and signing in again with a different Microsoft account.
+        </p>
+        {details_block}
+    </body>
+</html>"""
+        return HTMLResponse(content=html, status_code=403)
 
 
 def get_auth_config() -> AuthConfig:
@@ -42,7 +78,17 @@ def auth_callback(request: Request, cfg: AuthConfig = Depends(get_auth_config)) 
     error = request.query_params.get("error")
     if error:
         desc = request.query_params.get("error_description") or "Authentication failed"
-        raise HTTPException(status_code=401, detail=str(desc))
+        code_hint = str(desc)
+        # AADSTS50020 is a common "user does not exist in tenant" / "no access" case.
+        if "AADSTS50020" in code_hint or "does not exist in tenant" in code_hint.lower():
+            return _render_no_access_page(
+                message="You don't have access to the application.",
+                details=str(desc),
+            )
+        return _render_no_access_page(
+            message="Sorry, but we’re having trouble signing you in.",
+            details=str(desc),
+        )
 
     code = request.query_params.get("code")
     if not code:
@@ -82,6 +128,14 @@ def auth_callback(request: Request, cfg: AuthConfig = Depends(get_auth_config)) 
     nxt = request.session.get("next") or "/"
     request.session.pop("next", None)
     return RedirectResponse(url=str(nxt), status_code=302)
+
+
+@router.get("/auth/no-access")
+def no_access(message: str | None = None, details: str | None = None) -> HTMLResponse:
+    return _render_no_access_page(
+        message=message or "You don't have access to the application.",
+        details=details,
+    )
 
 
 @router.get("/logout")
