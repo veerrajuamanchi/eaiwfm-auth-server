@@ -14,9 +14,10 @@ from auth.utils import AuthConfig, extract_user, load_auth_config, validate_id_t
 router = APIRouter()
 
 
-def _render_no_access_page(*, message: str, details: str | None = None) -> HTMLResponse:
-        safe_message = (message or "You do not have access to this application.").strip()
+def _render_no_access_page(*, title: str, body_html: str, details: str | None = None) -> HTMLResponse:
+        safe_title = (title or "Access Not Enabled for This Account").strip()
         safe_details = (details or "").strip()
+
         details_block = ""
         if safe_details:
                 details_block = (
@@ -31,22 +32,31 @@ def _render_no_access_page(*, message: str, details: str | None = None) -> HTMLR
     <head>
         <meta charset=\"utf-8\" />
         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-        <title>Access required</title>
+        <title>{safe_title}</title>
     </head>
     <body style=\"font-family:system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:760px;margin:40px auto;padding:0 16px;line-height:1.45\">
-        <h1 style=\"margin:0 0 12px\">Access required</h1>
-        <p style=\"margin:0 0 12px\">{safe_message}</p>
-        <p style=\"margin:0 0 16px\">
-            For access and more information, contact
-            <a href=\"mailto:founder@eaiwfm.com\">founder@eaiwfm.com</a>.
-        </p>
-        <p style=\"margin:0 0 16px\">
-            You can also try signing out and signing in again with a different Microsoft account.
-        </p>
+        <h1 style=\"margin:0 0 12px\">{safe_title}</h1>
+        {body_html}
         {details_block}
     </body>
 </html>"""
         return HTMLResponse(content=html, status_code=403)
+
+
+def _render_access_not_enabled(*, details: str | None = None) -> HTMLResponse:
+        return _render_no_access_page(
+                title="Access Not Enabled for This Account",
+                body_html=(
+                        "<p style=\"margin:0 0 12px\">"
+                        "Your organization is not currently authorized to access the Enterprise AI Agents Workforce Management platform."
+                        "</p>"
+                        "<p style=\"margin:0 0 16px\">"
+                        "If you would like to request a demo or obtain access, please contact "
+                        "<a href=\"mailto:founder@eaiwfm.com\">founder@eaiwfm.com</a>."
+                        "</p>"
+                ),
+                details=details,
+        )
 
 
 def get_auth_config() -> AuthConfig:
@@ -78,15 +88,26 @@ def auth_callback(request: Request, cfg: AuthConfig = Depends(get_auth_config)) 
     error = request.query_params.get("error")
     if error:
         desc = request.query_params.get("error_description") or "Authentication failed"
-        code_hint = str(desc)
-        # AADSTS50020 is a common "user does not exist in tenant" / "no access" case.
-        if "AADSTS50020" in code_hint or "does not exist in tenant" in code_hint.lower():
-            return _render_no_access_page(
-                message="You don't have access to the application.",
-                details=str(desc),
-            )
+        code_hint = f"{error} {desc}".strip()
+        code_hint_lower = code_hint.lower()
+
+        # Common "no access" / tenant mismatch cases.
+        if (
+            "aadsts50020" in code_hint_lower
+            or "does not exist in tenant" in code_hint_lower
+            or "unauthorized_client" in code_hint_lower
+            or "not enabled for consumers" in code_hint_lower
+        ):
+            return _render_access_not_enabled(details=str(desc))
+
         return _render_no_access_page(
-            message="Sorry, but we’re having trouble signing you in.",
+            title="Sign-in error",
+            body_html=(
+                "<p style=\"margin:0 0 12px\">Sorry, but we’re having trouble signing you in.</p>"
+                "<p style=\"margin:0 0 16px\">If the problem persists, contact "
+                "<a href=\"mailto:founder@eaiwfm.com\">founder@eaiwfm.com</a>."
+                "</p>"
+            ),
             details=str(desc),
         )
 
@@ -132,10 +153,9 @@ def auth_callback(request: Request, cfg: AuthConfig = Depends(get_auth_config)) 
 
 @router.get("/auth/no-access")
 def no_access(message: str | None = None, details: str | None = None) -> HTMLResponse:
-    return _render_no_access_page(
-        message=message or "You don't have access to the application.",
-        details=details,
-    )
+    # Backward-compatible endpoint; show the access-not-enabled page.
+    # (The query parameter `message` is ignored now to keep UX consistent.)
+    return _render_access_not_enabled(details=details)
 
 
 @router.get("/logout")
