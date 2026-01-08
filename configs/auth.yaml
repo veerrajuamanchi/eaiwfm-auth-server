@@ -1,0 +1,25 @@
+# Optional config file for documentation/local defaults.
+# Environment variables take precedence.
+#
+# Leave these empty and set environment variables in production.
+
+tenant_id: ""
+client_id: ""
+client_secret: ""
+
+# Local default callback (override in Render):
+redirect_uri: "http://localhost:8000/auth/callback"
+
+# Optional override. If omitted, defaults to https://login.microsoftonline.com/<tenant_id>
+authority_url: ""
+
+# NOTE: openid/profile/offline_access are reserved and added by MSAL automatically.
+scopes:
+  - email
+
+session_secret: ""
+
+cookie_secure: false
+cookie_samesite: lax
+
+post_logout_redirect_uri: "http://localhost:3000/"

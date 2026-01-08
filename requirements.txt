@@ -1,0 +1,7 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+msal>=1.28.0
+PyJWT[crypto]>=2.10.0
+requests>=2.32.0
+pyyaml>=6.0.1
+itsdangerous>=2.2.0
