@@ -1,0 +1,18 @@
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = [
+  "-q",
+  "--cov=auth",
+  "--cov=app",
+  "--cov-report=term-missing",
+  "--cov-fail-under=90",
+]
+
+[tool.coverage.run]
+source = ["auth", "app"]
+omit = [
+  "*/tests/*",
+  "*/__pycache__/*",
+]
