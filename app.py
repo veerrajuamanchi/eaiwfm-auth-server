@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from auth.routes import router
-from auth.utils import load_auth_config
+from auth.utils import _resolve_setting, load_auth_config
 
 
 def create_app() -> FastAPI:
@@ -17,12 +17,13 @@ def create_app() -> FastAPI:
     app = FastAPI(title="eaiwfm-auth-server")
 
     # Allow the frontend to call /api/me with cookies.
-    cors_origins = [
-        o.strip()
-        for o in (os.getenv("AUTH_CORS_ORIGINS") or "http://localhost:3000").split(",")
-        if o.strip()
-    ]
-    cors_origin_regex = os.getenv("AUTH_CORS_ORIGIN_REGEX") or r"^https?://(localhost|127\.0\.0\.1)(:\\d+)?$"
+    cors_origins_raw = _resolve_setting("AUTH_CORS_ORIGINS", "http://localhost:3000")
+    cors_origins = [o.strip() for o in cors_origins_raw.split(",") if o.strip()]
+
+    cors_origin_regex = _resolve_setting(
+        "AUTH_CORS_ORIGIN_REGEX",
+        r"^https?://(localhost|127\.0\.0\.1)(:\\d+)?$",
+    )
 
     app.add_middleware(
         CORSMiddleware,

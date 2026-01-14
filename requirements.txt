@@ -5,3 +5,10 @@ PyJWT[crypto]>=2.10.0
 requests>=2.32.0
 pyyaml>=6.0.1
 itsdangerous>=2.2.0
+
+# Shared utilities
+eaiwfm-common-utilities @ git+https://github.com/veerrajuamanchi/eaiwfm-common-utilities.git
+
+# Key Vault secret loading
+azure-identity>=1.16.0
+azure-keyvault-secrets>=4.8.0

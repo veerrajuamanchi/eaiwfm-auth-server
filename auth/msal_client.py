@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 import secrets
 from dataclasses import dataclass
 
@@ -12,6 +14,13 @@ from auth.utils import AuthConfig
 class AuthFlowState:
     state: str
     nonce: str
+
+
+_log = logging.getLogger("eaiwfm.auth.msal")
+
+
+def _debug_redirect_enabled() -> bool:
+    return os.getenv("AUTH_DEBUG_REDIRECT_URI", "0").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def create_confidential_client(cfg: AuthConfig) -> msal.ConfidentialClientApplication:
@@ -32,6 +41,8 @@ def build_authorization_url(
     cfg: AuthConfig,
     flow: AuthFlowState,
 ) -> str:
+    if _debug_redirect_enabled():
+        _log.warning("MSAL get_authorization_request_url redirect_uri=%s", cfg.redirect_uri)
     return app.get_authorization_request_url(
         scopes=cfg.scopes,
         state=flow.state,
@@ -48,6 +59,8 @@ def exchange_code_for_tokens(
     cfg: AuthConfig,
     code: str,
 ) -> dict:
+    if _debug_redirect_enabled():
+        _log.warning("MSAL acquire_token_by_authorization_code redirect_uri=%s", cfg.redirect_uri)
     return app.acquire_token_by_authorization_code(
         code=code,
         scopes=cfg.scopes,

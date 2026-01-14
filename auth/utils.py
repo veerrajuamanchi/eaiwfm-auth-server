@@ -10,6 +10,8 @@ import jwt
 import requests
 import yaml
 
+from eaiwfm_common_utilities.keyvault import env_name_to_secret_name, get_secret_value
+
 
 @dataclass(frozen=True)
 class AuthConfig:
@@ -40,6 +42,48 @@ def _env(name: str, default: str | None = None, *, required: bool = False) -> st
     return chosen
 
 
+def _is_template_placeholder(v: str) -> bool:
+    s = str(v or "").strip()
+    return bool(s) and s.startswith("<") and s.endswith(">")
+
+
+def _resolve_setting(name: str, default: str | None = None, *, required: bool = False) -> str:
+    """Resolve a setting from env -> Key Vault -> default.
+
+    Key Vault secret name mapping uses hyphens: AUTH_CLIENT_ID -> AUTH-CLIENT-ID.
+
+    Note: Environment variables always win (useful for tests/local overrides).
+    Key Vault is preferred over YAML/code defaults so production can be driven by
+    Key Vault without being shadowed by non-empty defaults.
+    """
+
+    # 1) Environment variable
+    env_val = os.getenv(name)
+    env_chosen = (str(env_val).strip() if env_val is not None else "")
+    if env_chosen:
+        if required and _is_template_placeholder(env_chosen):
+            raise RuntimeError(f"Missing required environment variable: {name} (template placeholder)")
+        return env_chosen
+
+    # 2) Azure Key Vault
+    kv_name = env_name_to_secret_name(name)
+    kv_val = get_secret_value(kv_name)
+    kv_chosen = (str(kv_val).strip() if kv_val is not None else "")
+    if kv_chosen:
+        return kv_chosen
+
+    # 3) Default (often from YAML/code)
+    chosen = (str(default).strip() if default is not None else "")
+    if chosen:
+        if required and _is_template_placeholder(chosen):
+            raise RuntimeError(f"Missing required setting: {name} (template placeholder)")
+        return chosen
+
+    if required:
+        raise RuntimeError(f"Missing required setting: {name} (not found in env/YAML/KeyVault)")
+    return ""
+
+
 def _parse_bool(v: str, default: bool = False) -> bool:
     if v is None:
         return default
@@ -62,10 +106,10 @@ def load_auth_config(config_path: str = "configs/auth.yaml") -> AuthConfig:
         with open(resolved_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
-    tenant_id = _env("AUTH_TENANT_ID", str(data.get("tenant_id") or ""), required=True)
-    client_id = _env("AUTH_CLIENT_ID", str(data.get("client_id") or ""), required=True)
-    client_secret = _env("AUTH_CLIENT_SECRET", str(data.get("client_secret") or ""), required=True)
-    redirect_uri = _env(
+    tenant_id = _resolve_setting("AUTH_TENANT_ID", str(data.get("tenant_id") or ""), required=True)
+    client_id = _resolve_setting("AUTH_CLIENT_ID", str(data.get("client_id") or ""), required=True)
+    client_secret = _resolve_setting("AUTH_CLIENT_SECRET", str(data.get("client_secret") or ""), required=True)
+    redirect_uri = _resolve_setting(
         "AUTH_REDIRECT_URI",
         str(data.get("redirect_uri") or "http://localhost:8000/auth/callback"),
         required=True,
@@ -77,7 +121,7 @@ def load_auth_config(config_path: str = "configs/auth.yaml") -> AuthConfig:
     if not yaml_authority or "<" in yaml_authority or ">" in yaml_authority:
         yaml_authority = ""
 
-    authority_url = _env("AUTH_AUTHORITY_URL", yaml_authority or default_authority)
+    authority_url = _resolve_setting("AUTH_AUTHORITY_URL", yaml_authority or default_authority)
 
     scopes = os.getenv("AUTH_SCOPES")
     if scopes:
@@ -90,12 +134,12 @@ def load_auth_config(config_path: str = "configs/auth.yaml") -> AuthConfig:
     if not scopes_list:
         scopes_list = ["email"]
 
-    session_secret = _env("AUTH_SESSION_SECRET", str(data.get("session_secret") or ""), required=True)
+    session_secret = _resolve_setting("AUTH_SESSION_SECRET", str(data.get("session_secret") or ""), required=True)
 
-    cookie_secure = _parse_bool(_env("AUTH_COOKIE_SECURE", str(data.get("cookie_secure") or "false")))
-    cookie_samesite = _env("AUTH_COOKIE_SAMESITE", str(data.get("cookie_samesite") or "lax"))
+    cookie_secure = _parse_bool(_resolve_setting("AUTH_COOKIE_SECURE", str(data.get("cookie_secure") or "false")))
+    cookie_samesite = _resolve_setting("AUTH_COOKIE_SAMESITE", str(data.get("cookie_samesite") or "lax"))
 
-    post_logout_redirect_uri = _env(
+    post_logout_redirect_uri = _resolve_setting(
         "AUTH_POST_LOGOUT_REDIRECT_URI",
         str(data.get("post_logout_redirect_uri") or "http://localhost:3000/"),
     )
