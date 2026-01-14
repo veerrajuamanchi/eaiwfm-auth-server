@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +13,9 @@ import requests
 import yaml
 
 from eaiwfm_common_utilities.keyvault import env_name_to_secret_name, get_secret_value
+
+
+_log = logging.getLogger("eaiwfm.auth.config")
 
 
 @dataclass(frozen=True)
@@ -84,6 +89,58 @@ def _resolve_setting(name: str, default: str | None = None, *, required: bool = 
     return ""
 
 
+def _debug_config_enabled() -> bool:
+    return (os.getenv("EAIWFM_AUTH_CONFIG_DEBUG") or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _mask_value(value: str, *, keep: int = 3) -> str:
+    s = str(value or "")
+    if not s:
+        return "<empty>"
+    if len(s) <= keep * 2:
+        return "<redacted>"
+    return f"{s[:keep]}...{s[-keep:]}"
+
+
+def _fingerprint(value: str) -> str:
+    s = str(value or "")
+    if not s:
+        return "-"
+    h = hashlib.sha256(s.encode("utf-8")).hexdigest()
+    # Short fingerprint is enough to compare without leaking the value.
+    return h[:12]
+
+
+def _resolve_setting_with_source(name: str, default: str | None = None, *, required: bool = False) -> tuple[str, str]:
+    """Like _resolve_setting but returns (value, source)."""
+
+    # 1) Environment variable
+    env_val = os.getenv(name)
+    env_chosen = (str(env_val).strip() if env_val is not None else "")
+    if env_chosen:
+        if required and _is_template_placeholder(env_chosen):
+            raise RuntimeError(f"Missing required environment variable: {name} (template placeholder)")
+        return env_chosen, "env"
+
+    # 2) Azure Key Vault
+    kv_name = env_name_to_secret_name(name)
+    kv_val = get_secret_value(kv_name)
+    kv_chosen = (str(kv_val).strip() if kv_val is not None else "")
+    if kv_chosen:
+        return kv_chosen, "keyvault"
+
+    # 3) Default (often from YAML/code)
+    chosen = (str(default).strip() if default is not None else "")
+    if chosen:
+        if required and _is_template_placeholder(chosen):
+            raise RuntimeError(f"Missing required setting: {name} (template placeholder)")
+        return chosen, "default"
+
+    if required:
+        raise RuntimeError(f"Missing required setting: {name} (not found in env/YAML/KeyVault)")
+    return "", "missing"
+
+
 def _parse_bool(v: str, default: bool = False) -> bool:
     if v is None:
         return default
@@ -106,9 +163,15 @@ def load_auth_config(config_path: str = "configs/auth.yaml") -> AuthConfig:
         with open(resolved_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
-    tenant_id = _resolve_setting("AUTH_TENANT_ID", str(data.get("tenant_id") or ""), required=True)
-    client_id = _resolve_setting("AUTH_CLIENT_ID", str(data.get("client_id") or ""), required=True)
-    client_secret = _resolve_setting("AUTH_CLIENT_SECRET", str(data.get("client_secret") or ""), required=True)
+    tenant_id, tenant_src = _resolve_setting_with_source(
+        "AUTH_TENANT_ID", str(data.get("tenant_id") or ""), required=True
+    )
+    client_id, client_id_src = _resolve_setting_with_source(
+        "AUTH_CLIENT_ID", str(data.get("client_id") or ""), required=True
+    )
+    client_secret, client_secret_src = _resolve_setting_with_source(
+        "AUTH_CLIENT_SECRET", str(data.get("client_secret") or ""), required=True
+    )
     redirect_uri = _resolve_setting(
         "AUTH_REDIRECT_URI",
         str(data.get("redirect_uri") or "http://localhost:8000/auth/callback"),
@@ -122,6 +185,20 @@ def load_auth_config(config_path: str = "configs/auth.yaml") -> AuthConfig:
         yaml_authority = ""
 
     authority_url = _resolve_setting("AUTH_AUTHORITY_URL", yaml_authority or default_authority)
+
+    if _debug_config_enabled():
+        _log.warning(
+            "AUTH config sources: AUTH_TENANT_ID=%s (%s) AUTH_CLIENT_ID=%s (%s) AUTH_CLIENT_SECRET=%s len=%s sha=%s (%s) KV_URL=%s",
+            _mask_value(tenant_id, keep=6),
+            tenant_src,
+            _mask_value(client_id, keep=6),
+            client_id_src,
+            _mask_value(client_secret, keep=2),
+            len(client_secret or ""),
+            _fingerprint(client_secret),
+            client_secret_src,
+            os.getenv("EAIWFM_KEYVAULT_URL") or os.getenv("EAIWFM_KEYVAULT_NAME") or "<default prod>",
+        )
 
     scopes = os.getenv("AUTH_SCOPES")
     if scopes:
